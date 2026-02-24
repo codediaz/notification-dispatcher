@@ -1,11 +1,16 @@
 import { Hono } from 'hono';
+import { apiKeyAuth } from '../../middleware/apiKeyAuth.js';
+import { recipients } from '../../modules/recipients/recipients.routes.js';
+import { templates } from '../../modules/templates/templates.routes.js';
+import { notifications } from '../../modules/notifications/notifications.routes.js';
 
 const internalRoutes = new Hono();
 
-// Internal routes are intended for service-to-service communication.
-// Protect these with authentication/IP allowlisting in production.
-internalRoutes.get('/status', (c) => {
-  return c.json({ success: true, message: 'Internal API is operational' });
-});
+// All internal routes require a valid API key
+internalRoutes.use('*', apiKeyAuth);
+
+internalRoutes.route('/recipients', recipients);
+internalRoutes.route('/templates', templates);
+internalRoutes.route('/notifications', notifications);
 
 export { internalRoutes };
