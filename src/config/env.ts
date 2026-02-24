@@ -8,6 +8,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url().default('postgres://postgres:postgres@localhost:5432/notification_dispatcher'),
   APP_VERSION: z.string().default('0.1.0'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  API_KEY: z.string().min(1).default('dev-internal-key'),
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).default('dev-whatsapp-verify-token'),
 });
 
 export type Env = z.infer<typeof envSchema>;
