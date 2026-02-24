@@ -1,0 +1,859 @@
+openapi: 3.1.0
+info:
+  title: Notification Dispatcher API
+  version: 0.1.0
+  description: |
+    Multi-channel notification dispatcher for scheduling and delivering reminders,
+    confirmations, and alerts (WhatsApp, email, and future channels).
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://notification-dispatcher-xxxxx.a.run.app
+    description: Cloud Run (example)
+
+tags:
+  - name: Health
+  - name: Internal
+  - name: Public Webhooks
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service, timestamp]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: notification-dispatcher
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /version:
+    get:
+      tags: [Health]
+      summary: Service version
+      security: []
+      responses:
+        "200":
+          description: Version metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, version, environment]
+                properties:
+                  service:
+                    type: string
+                    example: notification-dispatcher
+                  version:
+                    type: string
+                    example: 0.1.0
+                  environment:
+                    type: string
+                    example: development
+                  commitSha:
+                    type: string
+                    nullable: true
+                    example: a1b2c3d
+
+  /internal/recipients:
+    post:
+      tags: [Internal]
+      summary: Create or upsert a recipient
+      description: Creates a generic recipient (not tied to business domain concepts like "runner").
+      operationId: upsertRecipient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertRecipientRequest"
+      responses:
+        "200":
+          description: Recipient created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipientResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /internal/recipients/{recipientId}:
+    get:
+      tags: [Internal]
+      summary: Get recipient by ID
+      operationId: getRecipient
+      parameters:
+        - $ref: "#/components/parameters/RecipientIdPath"
+      responses:
+        "200":
+          description: Recipient found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipientResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /internal/recipients/{recipientId}/consents:
+    post:
+      tags: [Internal]
+      summary: Upsert recipient consent (opt-in / opt-out)
+      operationId: upsertRecipientConsent
+      parameters:
+        - $ref: "#/components/parameters/RecipientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertConsentRequest"
+      responses:
+        "200":
+          description: Consent updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /internal/templates:
+    post:
+      tags: [Internal]
+      summary: Create template metadata
+      description: Registers a logical template key mapped to a channel/provider template.
+      operationId: createTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        "201":
+          description: Template created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+    get:
+      tags: [Internal]
+      summary: List templates
+      operationId: listTemplates
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: channelType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ChannelType"
+      responses:
+        "200":
+          description: Templates list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TemplateResponse"
+
+  /internal/notifications:
+    post:
+      tags: [Internal]
+      summary: Create notification request (message intent)
+      description: |
+        Creates a notification request (queued or scheduled). This is the "intention of message"
+        that later gets processed by a worker/provider.
+      operationId: createNotificationRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationRequest"
+      responses:
+        "202":
+          description: Notification request accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationRequestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Duplicate external request (idempotency conflict)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      tags: [Internal]
+      summary: List notification requests
+      operationId: listNotificationRequests
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/NotificationStatus"
+        - name: channelType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ChannelType"
+        - name: recipientId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Notification requests list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationRequestResponse"
+
+  /internal/notifications/{notificationId}:
+    get:
+      tags: [Internal]
+      summary: Get notification request by ID
+      operationId: getNotificationRequest
+      parameters:
+        - $ref: "#/components/parameters/NotificationIdPath"
+      responses:
+        "200":
+          description: Notification request found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationRequestDetailResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /internal/notifications/{notificationId}/cancel:
+    post:
+      tags: [Internal]
+      summary: Cancel a queued/scheduled notification request
+      operationId: cancelNotificationRequest
+      parameters:
+        - $ref: "#/components/parameters/NotificationIdPath"
+      responses:
+        "200":
+          description: Notification canceled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    example: canceled
+        "409":
+          description: Cannot cancel due to current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /public/webhooks/whatsapp:
+    post:
+      tags: [Public Webhooks]
+      summary: Receive WhatsApp provider webhook events
+      security: []
+      operationId: receiveWhatsAppWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Webhook received
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: received
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+    get:
+      tags: [Public Webhooks]
+      summary: WhatsApp webhook verification challenge
+      security: []
+      operationId: verifyWhatsAppWebhook
+      parameters:
+        - name: hub.mode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: hub.verify_token
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns challenge when valid
+          content:
+            text/plain:
+              schema:
+                type: string
+        "403":
+          description: Invalid verification token
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+
+  parameters:
+    RecipientIdPath:
+      name: recipientId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Internal recipient ID
+    NotificationIdPath:
+      name: notificationId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Internal notification request ID
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ChannelType:
+      type: string
+      enum: [whatsapp, email]
+
+    ConsentStatus:
+      type: string
+      enum: [opted_in, opted_out, pending]
+
+    NotificationStatus:
+      type: string
+      enum: [queued, processing, sent, failed, canceled]
+
+    Priority:
+      type: string
+      enum: [low, normal, high]
+      default: normal
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: BAD_REQUEST
+            message:
+              type: string
+              example: Invalid payload
+            details:
+              nullable: true
+              oneOf:
+                - type: object
+                  additionalProperties: true
+                - type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+
+    UpsertRecipientRequest:
+      type: object
+      required: [tenantId]
+      properties:
+        tenantId:
+          type: string
+          example: runflow
+        externalRef:
+          type: string
+          description: External ID from source service (e.g., runner_123)
+          example: runner_123
+        name:
+          type: string
+          example: Juan Pérez
+        email:
+          type: string
+          format: email
+          nullable: true
+          example: juan@example.com
+        phoneE164:
+          type: string
+          nullable: true
+          description: Phone in E.164 format
+          example: "+593991234567"
+        locale:
+          type: string
+          nullable: true
+          example: es_EC
+        timezone:
+          type: string
+          nullable: true
+          example: America/Guayaquil
+      additionalProperties: false
+
+    RecipientResponse:
+      type: object
+      required:
+        [id, tenantId, externalRef, name, email, phoneE164, locale, timezone, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: rec_01HXYZ...
+        tenantId:
+          type: string
+          example: runflow
+        externalRef:
+          type: string
+          nullable: true
+          example: runner_123
+        name:
+          type: string
+          nullable: true
+          example: Juan Pérez
+        email:
+          type: string
+          format: email
+          nullable: true
+        phoneE164:
+          type: string
+          nullable: true
+        locale:
+          type: string
+          nullable: true
+        timezone:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UpsertConsentRequest:
+      type: object
+      required: [tenantId, channelType, status, source]
+      properties:
+        tenantId:
+          type: string
+          example: runflow
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        status:
+          $ref: "#/components/schemas/ConsentStatus"
+        source:
+          type: string
+          example: rsvp_form
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+        grantedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+      additionalProperties: false
+
+    ConsentResponse:
+      type: object
+      required:
+        [id, tenantId, recipientId, channelType, status, source, grantedAt, revokedAt, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: cns_01HXYZ...
+        tenantId:
+          type: string
+        recipientId:
+          type: string
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        status:
+          $ref: "#/components/schemas/ConsentStatus"
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+        grantedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateTemplateRequest:
+      type: object
+      required: [tenantId, key, channelType, language]
+      properties:
+        tenantId:
+          type: string
+          example: runflow
+        key:
+          type: string
+          example: event_reminder_24h
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        providerTemplateName:
+          type: string
+          nullable: true
+          example: event_reminder_24h_es
+        language:
+          type: string
+          example: es_EC
+        status:
+          type: string
+          enum: [draft, active, disabled]
+          default: draft
+        version:
+          type: integer
+          minimum: 1
+          default: 1
+      additionalProperties: false
+
+    TemplateResponse:
+      type: object
+      required: [id, tenantId, key, channelType, language, status, version, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: tpl_01HXYZ...
+        tenantId:
+          type: string
+        key:
+          type: string
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        providerTemplateName:
+          type: string
+          nullable: true
+        language:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, disabled]
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateNotificationRequest:
+      type: object
+      required:
+        [tenantId, sourceService, eventType, channelType, recipient, templateKey, payload]
+      properties:
+        tenantId:
+          type: string
+          example: runflow
+        sourceService:
+          type: string
+          example: runflow-api
+        externalRequestId:
+          type: string
+          description: Idempotency key from source system
+          example: evt_123:runner_456:event_reminder_24h:2026-02-25T11:00:00Z
+        eventType:
+          type: string
+          example: event_reminder
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        recipient:
+          type: object
+          description: Existing recipient reference or inline upsert data
+          properties:
+            recipientId:
+              type: string
+              nullable: true
+              example: rec_01HXYZ...
+            externalRef:
+              type: string
+              nullable: true
+              example: runner_123
+            name:
+              type: string
+              nullable: true
+            email:
+              type: string
+              format: email
+              nullable: true
+            phoneE164:
+              type: string
+              nullable: true
+          additionalProperties: false
+        templateKey:
+          type: string
+          example: event_reminder_24h
+        payload:
+          type: object
+          description: Variables used by template/provider
+          additionalProperties: true
+          example:
+            eventName: Rodaje 5K
+            eventTime: "06:00"
+            location: Parque Samanes
+            eventUrl: https://runflow.app/e/abc123
+        scheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: If omitted, dispatch as soon as possible
+        priority:
+          $ref: "#/components/schemas/Priority"
+      additionalProperties: false
+
+    NotificationRequestResponse:
+      type: object
+      required:
+        [id, tenantId, sourceService, eventType, channelType, recipientId, templateKey, payload, scheduledAt, priority, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          example: nreq_01HXYZ...
+        tenantId:
+          type: string
+          example: runflow
+        sourceService:
+          type: string
+          example: runflow-api
+        externalRequestId:
+          type: string
+          nullable: true
+        eventType:
+          type: string
+          example: event_reminder
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        recipientId:
+          type: string
+          example: rec_01HXYZ...
+        templateKey:
+          type: string
+          example: event_reminder_24h
+        payload:
+          type: object
+          additionalProperties: true
+        scheduledAt:
+          type: string
+          format: date-time
+          nullable: true
+        priority:
+          $ref: "#/components/schemas/Priority"
+        status:
+          $ref: "#/components/schemas/NotificationStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    NotificationDeliveryResponse:
+      type: object
+      required:
+        [id, notificationRequestId, attemptNumber, provider, providerStatus, createdAt]
+      properties:
+        id:
+          type: string
+          example: ndlv_01HXYZ...
+        notificationRequestId:
+          type: string
+          example: nreq_01HXYZ...
+        attemptNumber:
+          type: integer
+          minimum: 1
+          example: 1
+        provider:
+          type: string
+          example: meta_cloud
+        providerMessageId:
+          type: string
+          nullable: true
+          example: wamid.HBg...
+        providerStatus:
+          type: string
+          example: delivered
+        errorCode:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+        deliveredAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    WebhookEventResponse:
+      type: object
+      required: [id, channelType, provider, eventType, status, receivedAt]
+      properties:
+        id:
+          type: string
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        provider:
+          type: string
+          example: meta_cloud
+        eventType:
+          type: string
+          example: message_status
+        providerEventId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [received, processed, ignored, failed]
+        receivedAt:
+          type: string
+          format: date-time
+        processedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    NotificationRequestDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/NotificationRequestResponse"
+        - type: object
+          properties:
+            deliveries:
+              type: array
+              items:
+                $ref: "#/components/schemas/NotificationDeliveryResponse"
+            webhooks:
+              type: array
+              items:
+                $ref: "#/components/schemas/WebhookEventResponse"
