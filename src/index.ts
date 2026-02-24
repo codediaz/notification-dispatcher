@@ -2,10 +2,12 @@ import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { connectDb, disconnectDb } from './db/index.js';
+import { runMigrations } from './db/migrate.js';
 import { startWorkers, stopWorkers } from './workers/index.js';
 
 async function main(): Promise<void> {
   await connectDb();
+  await runMigrations();
   await startWorkers();
 
   const app = createApp();
